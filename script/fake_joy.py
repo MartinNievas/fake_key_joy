@@ -5,38 +5,16 @@
 # Released under the BSD License.
 #
 # Authors:
-#   * Siegfried-A. Gevatter
+#   * Original work: Siegfried-A. Gevatter
+#   * Modifications
+#       - Martin Nievas
 
 import curses
 import math
 
 import rospy
 from geometry_msgs.msg import Twist
-
-class Velocity(object):
-
-    def __init__(self, min_velocity, max_velocity, num_steps):
-        assert min_velocity > 0 and max_velocity > 0 and num_steps > 0
-        self._min = min_velocity
-        self._max = max_velocity
-        self._num_steps = num_steps
-        if self._num_steps > 1:
-            self._step_incr = (max_velocity - min_velocity) / (self._num_steps - 1)
-        else:
-            # If num_steps is one, we always use the minimum velocity.
-            self._step_incr = 0
-
-    def __call__(self, value, step):
-        """
-        Takes a value in the range [0, 1] and the step and returns the
-        velocity (usually m/s or rad/s).
-        """
-        if step == 0:
-            return 0
-
-        assert step > 0 and step <= self._num_steps
-        max_value = self._min + self._step_incr * (step - 1)
-        return value * max_value
+from sensor_msgs.msg import Joy
 
 class TextWindow():
 
@@ -75,126 +53,40 @@ class TextWindow():
     def beep(self):
         curses.flash()
 
-class KeyTeleop():
 
-    _interface = None
-
-    _linear = None
-    _angular = None
-
-    def __init__(self, interface):
-        self._interface = interface
-        self._pub_cmd = rospy.Publisher('key_vel', Twist)
-
-        self._hz = rospy.get_param('~hz', 10)
-
-        self._num_steps = rospy.get_param('~turbo/steps', 4)
-
-        forward_min = rospy.get_param('~turbo/linear_forward_min', 0.5)
-        forward_max = rospy.get_param('~turbo/linear_forward_max', 1.0)
-        self._forward = Velocity(forward_min, forward_max, self._num_steps)
-
-        backward_min = rospy.get_param('~turbo/linear_backward_min', 0.25)
-        backward_max = rospy.get_param('~turbo/linear_backward_max', 0.5)
-        self._backward = Velocity(backward_min, backward_max, self._num_steps)
-
-        angular_min = rospy.get_param('~turbo/angular_min', 0.7)
-        angular_max = rospy.get_param('~turbo/angular_max', 1.2)
-        self._rotation = Velocity(angular_min, angular_max, self._num_steps)
-
-    def run(self):
-        self._linear = 0
-        self._angular = 0
-
-        rate = rospy.Rate(self._hz)
-        while True:
-            keycode = self._interface.read_key()
-            if keycode:
-                if self._key_pressed(keycode):
-                    self._publish()
-            else:
-                self._publish()
-                rate.sleep()
-
-    def _get_twist(self, linear, angular):
-        twist = Twist()
-        if linear >= 0:
-            twist.linear.x = self._forward(1.0, linear)
-        else:
-            twist.linear.x = self._backward(-1.0, -linear)
-        twist.angular.z = self._rotation(math.copysign(1, angular), abs(angular))
-        return twist
-
-    def _key_pressed(self, keycode):
-        movement_bindings = {
-            curses.KEY_UP:    ( 1,  0),
-            curses.KEY_DOWN:  (-1,  0),
-            curses.KEY_LEFT:  ( 0,  1),
-            curses.KEY_RIGHT: ( 0, -1),
-        }
-        speed_bindings = {
-            ord(' '): (0, 0),
-        }
-        if keycode in movement_bindings:
-            acc = movement_bindings[keycode]
-            ok = False
-            if acc[0]:
-                linear = self._linear + acc[0]
-                if abs(linear) <= self._num_steps:
-                    self._linear = linear
-                    ok = True
-            if acc[1]:
-                angular = self._angular + acc[1]
-                if abs(angular) <= self._num_steps:
-                    self._angular = angular
-                    ok = True
-            if not ok:
-                self._interface.beep()
-        elif keycode in speed_bindings:
-            acc = speed_bindings[keycode]
-            # Note: bounds aren't enforced here!
-            if acc[0] is not None:
-                self._linear = acc[0]
-            if acc[1] is not None:
-                self._angular = acc[1]
-
-        elif keycode == ord('q'):
-            rospy.signal_shutdown('Bye')
-        else:
-            return False
-
-        return True
-
-    def _publish(self):
-        self._interface.clear()
-        self._interface.write_line(2, 'Linear: %d, Angular: %d' % (self._linear, self._angular))
-        self._interface.write_line(5, 'Use arrow keys to move, space to stop, q to exit.')
-        self._interface.refresh()
-
-        twist = self._get_twist(self._linear, self._angular)
-        self._pub_cmd.publish(twist)
-
+LogitechF710 = {
+    'A_BUTTON' : 0,
+    'B_BUTTON' : 1,
+    'X_BUTTON' : 2,
+    'Y_BUTTON' : 3,
+    'LEFT_BUMPER' : 4,
+    'RIGHT_BUMPER' : 5,
+    'BACK' : 6,
+    'START' : 7,
+    'LOGITECH' : 8,
+    'LEFT_JOYSTICK' : 9,
+    'RIGHT_JOYSTICK' : 10,
+    }
 
 class SimpleKeyTeleop():
     def __init__(self, interface):
         self._interface = interface
         self._pub_cmd = rospy.Publisher('key_vel', Twist)
+        self._pub_joy = rospy.Publisher('joy', Joy)
 
         self._hz = rospy.get_param('~hz', 10)
 
         self._forward_rate = rospy.get_param('~forward_rate', 0.8)
         self._backward_rate = rospy.get_param('~backward_rate', 0.5)
         self._rotation_rate = rospy.get_param('~rotation_rate', 1.0)
-        self._last_pressed = {}
         self._angular = 0
         self._linear = 0
+        self._joy_model = LogitechF710
+        self._buttons = []
 
-    movement_bindings = {
-        curses.KEY_UP:    ( 1,  0),
-        curses.KEY_DOWN:  (-1,  0),
-        curses.KEY_LEFT:  ( 0,  1),
-        curses.KEY_RIGHT: ( 0, -1),
-    }
+        for button in self._joy_model:
+            self._buttons.append(0)
+
 
     def run(self):
         rate = rospy.Rate(self._hz)
@@ -206,57 +98,65 @@ class SimpleKeyTeleop():
                 if keycode is None:
                     break
                 self._key_pressed(keycode)
-            self._set_velocity()
             self._publish()
             rate.sleep()
 
-    def _get_twist(self, linear, angular):
-        twist = Twist()
-        twist.linear.x = linear
-        twist.angular.z = angular
-        return twist
+    def _get_joy(self):
 
-    def _set_velocity(self):
-        now = rospy.get_time()
-        keys = []
-        for a in self._last_pressed:
-            if now - self._last_pressed[a] < 0.4:
-                keys.append(a)
-        linear = 0.0
-        angular = 0.0
-        for k in keys:
-            l, a = self.movement_bindings[k]
-            linear += l
-            angular += a
-        if linear > 0:
-            linear = linear * self._forward_rate
-        else:
-            linear = linear * self._backward_rate
-        angular = angular * self._rotation_rate
-        self._angular = angular
-        self._linear = linear
+        joy = Joy()
+
+        for status in self._buttons:
+            joy.buttons.append(status)
+        return joy
+
+    def _reset_buttons(self):
+        for i,button in enumerate(self._joy_model):
+            self._buttons[i] = 0
 
     def _key_pressed(self, keycode):
         self._keycode = keycode
         if keycode == ord('q'):
             self._running = False
             rospy.signal_shutdown('Bye')
-        elif keycode in self.movement_bindings:
-            self._last_pressed[keycode] = rospy.get_time()
+        if keycode == ord('j'):
+            self._buttons[self._joy_model['X_BUTTON']] = True
+        if keycode == ord('i'):
+            self._buttons[self._joy_model['Y_BUTTON']] = True
+        if keycode == ord('m'):
+            self._buttons[self._joy_model['A_BUTTON']] = True
+        if keycode == ord('k'):
+            self._buttons[self._joy_model['B_BUTTON']] = True
+        if keycode == ord('u'):
+            self._buttons[self._joy_model['LEFT_BUMPER']] = True
+        if keycode == ord('o'):
+            self._buttons[self._joy_model['RIGHT_BUMPER']] = True
+        if keycode == ord('a'):
+            self._buttons[self._joy_model['BACK']] = True
+        if keycode == ord('s'):
+            self._buttons[self._joy_model['LOGITECH']] = True
+        if keycode == ord('d'):
+            self._buttons[self._joy_model['START']] = True
+        if keycode == ord('e'):
+            self._buttons[self._joy_model['LEFT_JOYSTICK']] = True
+        if keycode == ord('r'):
+            self._buttons[self._joy_model['RIGHT_JOYSTICK']] = True
+
 
     def _publish(self):
         self._interface.clear()
         self._interface.write_line(2, 'Linear: %f, Angular: %f' % (self._linear, self._angular))
         self._interface.write_line(3, 'keycode: %c' % (self._keycode))
+        self._interface.write_line(4, 'keycode: %d' % (len(self._buttons)))
         self._interface.write_line(5, 'Use arrow keys to move, q to exit.')
         self._interface.refresh()
 
-        twist = self._get_twist(self._linear, self._angular)
-        self._pub_cmd.publish(twist)
+        joy = self._get_joy()
+        self._pub_joy.publish(joy)
+        self._reset_buttons()
 
 
 def main(stdscr):
-    rospy.init_node('key_teleop')
+    rospy.init_node('fake_joy_teleop')
     app = SimpleKeyTeleop(TextWindow(stdscr))
     app.run()
 
