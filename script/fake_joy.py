@@ -83,10 +83,13 @@ class SimpleKeyTeleop():
         self._linear = 0
         self._joy_model = LogitechF710
         self._buttons = []
+        self._axes = []
 
         for button in self._joy_model:
             self._buttons.append(0)
 
+        for axe in range(0,6):
+            self._axes.append(0.0)
 
     def run(self):
         rate = rospy.Rate(self._hz)
@@ -107,6 +110,8 @@ class SimpleKeyTeleop():
 
         for status in self._buttons:
             joy.buttons.append(status)
+        for axe in self._axes:
+            joy.axes.append(axe)
         return joy
 
     def _reset_buttons(self):
@@ -118,28 +123,39 @@ class SimpleKeyTeleop():
         if keycode == ord('q'):
             self._running = False
             rospy.signal_shutdown('Bye')
-        if keycode == ord('j'):
+        elif keycode == ord('j'):
             self._buttons[self._joy_model['X_BUTTON']] = True
-        if keycode == ord('i'):
+        elif keycode == ord('i'):
             self._buttons[self._joy_model['Y_BUTTON']] = True
-        if keycode == ord('m'):
+        elif keycode == ord('m'):
             self._buttons[self._joy_model['A_BUTTON']] = True
-        if keycode == ord('k'):
+        elif keycode == ord('k'):
             self._buttons[self._joy_model['B_BUTTON']] = True
-        if keycode == ord('u'):
+        elif keycode == ord('u'):
             self._buttons[self._joy_model['LEFT_BUMPER']] = True
-        if keycode == ord('o'):
+        elif keycode == ord('o'):
             self._buttons[self._joy_model['RIGHT_BUMPER']] = True
-        if keycode == ord('a'):
+        elif keycode == ord('a'):
             self._buttons[self._joy_model['BACK']] = True
-        if keycode == ord('s'):
+        elif keycode == ord('s'):
             self._buttons[self._joy_model['LOGITECH']] = True
-        if keycode == ord('d'):
+        elif keycode == ord('d'):
             self._buttons[self._joy_model['START']] = True
-        if keycode == ord('e'):
+        elif keycode == ord('e'):
             self._buttons[self._joy_model['LEFT_JOYSTICK']] = True
-        if keycode == ord('r'):
+        elif keycode == ord('r'):
             self._buttons[self._joy_model['RIGHT_JOYSTICK']] = True
+        elif keycode == ord('f'):
+            self._axes[0] = -0.1
+        elif keycode == ord('g'):
+            self._axes[0] = 0.1
+        elif keycode == ord('t'):
+            self._axes[1] = 0.1
+        elif keycode == ord('v'):
+            self._axes[1] = -0.1
+        elif keycode == ord('x'):
+            self._axes[0] = 0.0
+            self._axes[1] = 0.0
 
 
     def _publish(self):
